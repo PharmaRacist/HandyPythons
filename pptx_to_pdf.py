@@ -1,5 +1,6 @@
 import argparse
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 
@@ -43,18 +44,59 @@ def convert_pptx_to_pdf(input_path: str, output_path: str = None) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert a PPTX file to PDF (no LibreOffice needed)."
+        description="Convert PPTX files to PDF in parallel (no LibreOffice needed)."
     )
-    parser.add_argument("input", help="Path to the input .pptx or .ppt file")
     parser.add_argument(
-        "-o", "--output", help="Path for the output .pdf file (optional)", default=None
+        "input", 
+        nargs="+", 
+        help="Path to the input .pptx or .ppt file(s)"
+    )
+    parser.add_argument(
+        "-o", "--output", 
+        help="Path for the output .pdf file (ignored if using --batch or multiple inputs)", 
+        default=None
+    )
+    parser.add_argument(
+        "--batch", 
+        action="store_true", 
+        help="Explicitly flag that multiple files are being processed"
+    )
+    parser.add_argument(
+        "-j", "--jobs",
+        type=int,
+        default=None,
+        help="Number of parallel workers (defaults to CPU count)"
     )
     args = parser.parse_args()
 
-    try:
-        convert_pptx_to_pdf(args.input, args.output)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+    if len(args.input) > 1 and not args.batch:
+        print("Error: Multiple files provided. Use --batch flag to confirm batch processing.", file=sys.stderr)
+        sys.exit(1)
+
+    has_errors = False
+
+    if len(args.input) == 1:
+        try:
+            convert_pptx_to_pdf(args.input[0], args.output)
+        except Exception as e:
+            print(f"Error converting {args.input[0]}: {e}", file=sys.stderr)
+            has_errors = True
+    else:
+        with ProcessPoolExecutor(max_workers=args.jobs) as executor:
+            future_to_file = {
+                executor.submit(convert_pptx_to_pdf, file_path, None): file_path 
+                for file_path in args.input
+            }
+            
+            for future in as_completed(future_to_file):
+                file_path = future_to_file[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Error converting {file_path}: {e}", file=sys.stderr)
+                    has_errors = True
+
+    if has_errors:
         sys.exit(1)
 
 
